@@ -1,0 +1,72 @@
+name: Database
+# Applies the procurement migration and role script to a Postgres 18 service container, then
+# checks row-level security as the app role. Runs on every change to db/ or scripts/.
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  migrate-and-rls:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      OWNER_URL: postgresql://postgres:test@localhost:5432/app
+      APP_PASSWORD: test-only-password-not-a-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install PostgreSQL 18 client tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - run: npm ci
+      - name: Create the database, apply the migration twice, then the roles
+        run: |
+          psql "postgresql://postgres:test@localhost:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE DATABASE app"
+          npm run migrate
+          npm run migrate
+          psql "$OWNER_URL" -v ON_ERROR_STOP=1 -v procurement_app_password="$APP_PASSWORD" -f db/roles/bootstrap.sql
+      - name: Row-level security as the app role
+        run: |
+          APP_URL="postgresql://procurement_app:${APP_PASSWORD}@localhost:5432/app"
+          A=11111111-1111-4111-8111-111111111111
+          B=22222222-2222-4222-8222-222222222222
+          # Own tenant can write and read its rows.
+          psql "$APP_URL" -v ON_ERROR_STOP=1 -c "SELECT set_config('app.tenant_id', '$A', false)" -c "INSERT INTO procurement.suppliers (id, tenant_id, party_id, name, status, categories) VALUES (gen_random_uuid(), '$A', gen_random_uuid(), 'A co', 'pending-qualification', '{raw-material}')"
+          n=$(psql "$APP_URL" -At -c "SELECT set_config('app.tenant_id', '$A', false)" -c "SELECT count(*) FROM procurement.suppliers")
+          test "$(echo "$n" | tail -1)" = "1" && echo "own tenant sees its row"
+          # Another tenant sees nothing.
+          n=$(psql "$APP_URL" -At -c "SELECT set_config('app.tenant_id', '$B', false)" -c "SELECT count(*) FROM procurement.suppliers")
+          test "$(echo "$n" | tail -1)" = "0" && echo "other tenant sees no rows"
+          # Writing a row for another tenant is refused.
+          if psql "$APP_URL" -v ON_ERROR_STOP=1 -c "SELECT set_config('app.tenant_id', '$B', false)" -c "INSERT INTO procurement.suppliers (id, tenant_id, party_id, name, status, categories) VALUES (gen_random_uuid(), '$A', gen_random_uuid(), 'x', 'pending-qualification', '{raw-material}')" 2>/dev/null; then
+            echo "cross-tenant write was allowed" && exit 1
+          else
+            echo "cross-tenant write refused"
+          fi
+          # The app role cannot create tables.
+          if psql "$APP_URL" -v ON_ERROR_STOP=1 -c "CREATE TABLE procurement.should_fail (x int)" 2>/dev/null; then
+            echo "app role created a table" && exit 1
+          else
+            echo "app role cannot run DDL"
+          fi
