@@ -12,6 +12,9 @@ export const PURCHASE_ORDER_STATUSES = [
 ] as const;
 export type PurchaseOrderStatus = (typeof PURCHASE_ORDER_STATUSES)[number];
 
+export const RFQ_STATUSES = ["open", "quotes-in", "compared", "awarded", "cancelled"] as const;
+export type RfqStatus = (typeof RFQ_STATUSES)[number];
+
 export const SUPPLIER_STATUSES = ["pending-qualification", "approved", "conditionally-approved", "on-hold", "rejected"] as const;
 export type SupplierStatus = (typeof SUPPLIER_STATUSES)[number];
 
@@ -36,6 +39,20 @@ const PO_TRANSITIONS: Record<PurchaseOrderStatus, readonly PurchaseOrderStatus[]
   closed: [],
   cancelled: [],
 };
+
+const RFQ_TRANSITIONS: Record<RfqStatus, readonly RfqStatus[]> = {
+  open: ["quotes-in", "cancelled"],
+  "quotes-in": ["compared", "awarded", "cancelled"],
+  compared: ["awarded", "cancelled"],
+  awarded: [],
+  cancelled: [],
+};
+
+export function assertRfqTransition(from: RfqStatus, to: RfqStatus): void {
+  if (!RFQ_TRANSITIONS[from].includes(to)) {
+    throw new DomainError("INVALID_STATE", `RFQ cannot move from ${from} to ${to}`, 409);
+  }
+}
 
 export function assertPurchaseRequestTransition(from: PurchaseRequestStatus, to: PurchaseRequestStatus): void {
   if (!PR_TRANSITIONS[from].includes(to)) {

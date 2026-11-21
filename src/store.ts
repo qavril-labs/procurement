@@ -2,7 +2,7 @@
 // store can never return another tenant's rows. The in-memory store below backs the unit
 // tests; the Postgres store implements the same interface inside withTenantTransaction.
 
-import type { PurchaseOrderStatus, PurchaseRequestStatus, SupplierStatus } from "./state.js";
+import type { PurchaseOrderStatus, PurchaseRequestStatus, RfqStatus, SupplierStatus } from "./state.js";
 
 export interface SupplierRecord {
   id: string;
@@ -71,6 +71,36 @@ export interface PurchaseOrderRecord {
   createdAt: string;
 }
 
+export interface RfqQuoteRecord {
+  supplierId: string;
+  unitPriceMinor: bigint;
+  currency: string;
+  taxBps: bigint;
+  freightMinor: bigint;
+  insuranceMinor: bigint;
+  leadTimeDays: number;
+  paymentTerms: string | null;
+  warrantyMonths: number | null;
+  validUntil: string | null;
+  deviations: string | null;
+  quotedAt: string;
+}
+
+export interface RfqRecord {
+  id: string;
+  tenantId: string;
+  number: string;
+  status: RfqStatus;
+  purchaseRequestIds: string[];
+  supplierIds: string[];
+  responseDeadline: string;
+  deliveryLocation: string | null;
+  termsAndConditions: string | null;
+  quotes: RfqQuoteRecord[];
+  awardedSupplierId: string | null;
+  createdAt: string;
+}
+
 export interface OutboxEvent {
   id: string;
   tenantId: string;
@@ -98,11 +128,15 @@ export interface ProcurementStore {
   listPurchaseRequests(tenantId: string, status: PurchaseRequestStatus | undefined, limit: number, cursor: string | null): Promise<ListPage<PurchaseRequestRecord>>;
   getPurchaseRequest(tenantId: string, id: string): Promise<PurchaseRequestRecord | null>;
   savePurchaseRequest(record: PurchaseRequestRecord): Promise<void>;
-  nextNumber(tenantId: string, key: "purchase-request" | "purchase-order"): Promise<string>;
+  nextNumber(tenantId: string, key: "purchase-request" | "purchase-order" | "rfq"): Promise<string>;
 
   listPurchaseOrders(tenantId: string, filter: { status?: PurchaseOrderStatus; supplierId?: string }, limit: number, cursor: string | null): Promise<ListPage<PurchaseOrderRecord>>;
   getPurchaseOrder(tenantId: string, id: string): Promise<PurchaseOrderRecord | null>;
   savePurchaseOrder(record: PurchaseOrderRecord): Promise<void>;
+
+  listRfqs(tenantId: string, status: RfqStatus | undefined, limit: number, cursor: string | null): Promise<ListPage<RfqRecord>>;
+  getRfq(tenantId: string, id: string): Promise<RfqRecord | null>;
+  saveRfq(record: RfqRecord): Promise<void>;
 
   appendOutbox(event: OutboxEvent): Promise<void>;
   findIdempotency(tenantId: string, key: string): Promise<IdempotencyRecord | null>;
@@ -124,6 +158,7 @@ export class MemoryProcurementStore implements ProcurementStore {
   readonly outbox: OutboxEvent[] = [];
   private idem = new Map<string, IdempotencyRecord>();
   private counters = new Map<string, number>();
+  private rfqs = new Map<string, RfqRecord>();
 
   async listSuppliers(tenantId: string, filter: { status?: SupplierStatus; search?: string }, limit: number, cursor: string | null) {
     const all = [...this.suppliers.values()]
@@ -151,11 +186,12 @@ export class MemoryProcurementStore implements ProcurementStore {
   async savePurchaseRequest(record: PurchaseRequestRecord) {
     this.requests.set(record.id, record);
   }
-  async nextNumber(tenantId: string, key: "purchase-request" | "purchase-order") {
+  async nextNumber(tenantId: string, key: "purchase-request" | "purchase-order" | "rfq") {
     const k = `${tenantId}:${key}`;
     const n = (this.counters.get(k) ?? 0) + 1;
     this.counters.set(k, n);
-    return `${key === "purchase-request" ? "PR" : "PO"}-${String(n).padStart(6, "0")}`;
+    const prefix = key === "purchase-request" ? "PR" : key === "rfq" ? "RFQ" : "PO";
+    return `${prefix}-${String(n).padStart(6, "0")}`;
   }
 
   async listPurchaseOrders(tenantId: string, filter: { status?: PurchaseOrderStatus; supplierId?: string }, limit: number, cursor: string | null) {
@@ -171,6 +207,18 @@ export class MemoryProcurementStore implements ProcurementStore {
   }
   async savePurchaseOrder(record: PurchaseOrderRecord) {
     this.orders.set(record.id, record);
+  }
+
+  async listRfqs(tenantId: string, status: RfqStatus | undefined, limit: number, cursor: string | null) {
+    const all = [...this.rfqs.values()].filter((r) => r.tenantId === tenantId && (!status || r.status === status));
+    return page(all, limit, cursor);
+  }
+  async getRfq(tenantId: string, id: string) {
+    const r = this.rfqs.get(id);
+    return r && r.tenantId === tenantId ? r : null;
+  }
+  async saveRfq(record: RfqRecord) {
+    this.rfqs.set(record.id, record);
   }
 
   async appendOutbox(event: OutboxEvent) {

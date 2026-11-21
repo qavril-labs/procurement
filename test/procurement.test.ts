@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { buildApp, hashToken } from "../src/app.js";
 import { MemoryProcurementStore } from "../src/store.js";
 import { MemorySessionResolver } from "../src/sessions.js";
+import { MemoryUnitOfWork } from "../src/uow.js";
 import type { Caller } from "../src/service.js";
 
 const TENANT = "11111111-1111-4111-8111-111111111111";
@@ -34,7 +35,7 @@ describe("procurement API", () => {
   beforeEach(() => {
     store = new MemoryProcurementStore();
     sessions = new MemorySessionResolver();
-    app = buildApp({ store, sessions, now: () => new Date("2026-11-21T09:00:00Z") });
+    app = buildApp({ uow: new MemoryUnitOfWork(store), sessions, now: () => new Date("2026-11-21T09:00:00Z") });
     clerk = token(TENANT, "clerk");
     manager = token(TENANT, "manager");
     otherTenant = token(OTHER, "other");
