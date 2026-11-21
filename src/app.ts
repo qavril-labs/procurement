@@ -9,7 +9,8 @@ import type { UnitOfWork } from "./uow.js";
 
 /** Resolves a session token to the caller. Production uses the platform identity service. */
 export interface SessionResolver {
-  resolve(tokenHash: string): Promise<Caller | null>;
+  /** Takes the raw token: the platform owns the session, so a resolver may need the token itself. */
+  resolve(token: string): Promise<Caller | null>;
 }
 
 export interface AppDeps {
@@ -64,7 +65,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!req.url.startsWith("/v1/")) return;
     const token = bearer(req);
     if (!token) throw new DomainError("UNAUTHENTICATED", "missing or invalid session token", 401);
-    const caller = await deps.sessions.resolve(hashToken(token));
+    const caller = await deps.sessions.resolve(token);
     if (!caller) throw new DomainError("UNAUTHENTICATED", "session not found or expired", 401);
     (req as FastifyRequest & { caller: Caller }).caller = caller;
   });

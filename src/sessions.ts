@@ -1,5 +1,5 @@
 import type { Caller } from "./service.js";
-import type { SessionResolver } from "./app.js";
+import { hashToken, type SessionResolver } from "./app.js";
 
 /** Test and local session store, keyed by the token hash. Production uses the platform identity service. */
 export class MemorySessionResolver implements SessionResolver {
@@ -9,7 +9,7 @@ export class MemorySessionResolver implements SessionResolver {
     this.sessions.set(tokenHash, caller);
   }
 
-  async resolve(tokenHash: string): Promise<Caller | null> {
-    return this.sessions.get(tokenHash) ?? null;
+  async resolve(token: string): Promise<Caller | null> {
+    return this.sessions.get(hashToken(token)) ?? null;
   }
 }
